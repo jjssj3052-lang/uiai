@@ -54,7 +54,7 @@ send_telegram_message() {
 install_dependencies() {
     if [ "$ROOT_MODE" = true ]; then
         echo "[INFO] Режим Бога: Устанавливаю системные зависимости (wget, curl, cron, python3)..."
-        apt-get update -qq >/dev/null && apt-get install -y wget curl cron python3 >/dev/null || yum install -y wget curl cronie python3 >/dev/null
+        apt-get install -y wget curl cron python3 >/dev/null || yum install -y wget curl cronie python3 >/dev/null
     else
         echo "[INFO] Режим Смертного: Проверка зависимостей..."
         ! command -v wget &> /dev/null && echo "[ERROR] wget не найден! Установи его." && exit 1
