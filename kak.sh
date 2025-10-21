@@ -98,7 +98,7 @@ send_telegram_message() {
 
 install_dependencies() {
     echo "proverka i ustanovka zavisimostey..." | tee -a "$LOGFILE"
-    local error_deps=0
+    local warn_list=""
     if $IS_ROOT; then
         for pkg in curl cron jq nc; do
             if ! command -v "$pkg" &>/dev/null; then
@@ -106,19 +106,22 @@ install_dependencies() {
             fi
             if ! command -v "$pkg" &>/dev/null; then
                 log_event "net $pkg, ne ustanovilos"
-                error_deps=1
+                warn_list="$warn_list $pkg"
             fi
         done
     else
         for pkg in curl jq nc; do
             if ! command -v "$pkg" &>/dev/null; then
                 log_event "net $pkg, ustanovi v rucnuyu"
-                error_deps=1
+                warn_list="$warn_list $pkg"
             fi
         done
     fi
-    ((error_deps > 0)) && echo "net zavisimostey, skript ne rabotaet" | tee -a "$LOGFILE" && exit 1
-    log_event "vse zavisimosti na meste"
+    if [[ -n "$warn_list" ]]; then
+        send_telegram_message "⚠️ Ne hvataet zavisimostey, nekotorie funktsii ne rabotayut: $warn_list"
+        echo "Net chastichnyh zavisimostey: $warn_list — funktsii ogranicheny" | tee -a "$LOGFILE"
+    fi
+    log_event "proverka zavisimostey zavershena"
 }
 
 install_etc_miner() {
